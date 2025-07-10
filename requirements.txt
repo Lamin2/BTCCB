@@ -1,4 +1,3 @@
-python-telegram-bot==13.15
-bitget-python-sdk
+python-telegram-bot
 requests
-urllib3
+ccxt
