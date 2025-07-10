@@ -1,47 +1,75 @@
+import os
 import requests
 import time
-from bitget.spot.public_api import SpotPublicAPI
-from bitget.spot.market_api import SpotMarketAPI
-from telegram import Bot
+from dotenv import load_dotenv
+from bitget.spot import Spot
+from bitget.mix import Mix
 
-# Variables d'environnement (à définir sur Render)
-import os
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# Charger les variables d'environnement
+load_dotenv()
+
+API_KEY = os.getenv("BITGET_API_KEY")
+API_SECRET = os.getenv("BITGET_API_SECRET")
+API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-bot = Bot(token=TELEGRAM_TOKEN)
+symbol = "BTCUSDT"
+product_type = "umcbl"  # USDT-M Futures
 
-def send_telegram_message(message):
-    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+mix = Mix(API_KEY, API_SECRET, API_PASSPHRASE)
 
-def fetch_order_book(symbol="BTCUSDT", limit=1000):
-    market_api = SpotMarketAPI()
+def get_order_book():
     try:
-        response = market_api.orderbook(symbol)
-        return response['data']
+        depth = mix.market_api().get_depth(symbol, product_type, limit=1000)
+        bids = [[float(x[0]), float(x[1])] for x in depth['data']['bids']]
+        asks = [[float(x[0]), float(x[1])] for x in depth['data']['asks']]
+        return bids, asks
     except Exception as e:
-        send_telegram_message(f"Erreur API: {e}")
-        return None
+        print("Erreur récupération order book:", e)
+        return [], []
 
-def analyze_and_trade():
-    data = fetch_order_book()
-    if not data:
-        return
+def analyze_order_book(bids, asks):
+    top_bids = bids[:100]
+    top_asks = asks[:100]
 
-    bids = data['bids']
-    asks = data['asks']
+    total_bid_liquidity = sum([price * volume for price, volume in top_bids])
+    total_ask_liquidity = sum([price * volume for price, volume in top_asks])
+    total_bid_volume = sum([volume for _, volume in top_bids])
+    total_ask_volume = sum([volume for _, volume in top_asks])
 
-    top_buy = sum(float(bid[1]) for bid in bids[:20])
-    top_sell = sum(float(ask[1]) for ask in asks[:20])
+    imbalance = (total_bid_volume - total_ask_volume) / max(total_bid_volume + total_ask_volume, 1)
 
-    imbalance = top_buy - top_sell
+    print(f"🔍 BID Vol: {total_bid_volume:.2f} | ASK Vol: {total_ask_volume:.2f}")
+    print(f"📦 BID Liquidity: {total_bid_liquidity:.2f} | ASK Liquidity: {total_ask_liquidity:.2f}")
+    print(f"📊 Imbalance: {imbalance:.4f}")
 
-    if imbalance > 200:
-        send_telegram_message("📈 Signal Long détecté sur BTC avec déséquilibre de volume haussier.")
-    elif imbalance < -200:
-        send_telegram_message("📉 Signal Short détecté sur BTC avec déséquilibre de volume baissier.")
+    # Conditions précises pour signaux puissants
+    if imbalance > 0.25 and total_bid_liquidity > total_ask_liquidity * 1.2:
+        return "LONG"
+    elif imbalance < -0.25 and total_ask_liquidity > total_bid_liquidity * 1.2:
+        return "SHORT"
     else:
-        send_telegram_message("🔍 Aucune opportunité claire pour le moment.")
+        return "NO SIGNAL"
+
+def send_telegram_signal(signal):
+    if signal in ["LONG", "SHORT"]:
+        message = f"📈 Signal détecté : {signal} sur BTC/USDT ⚡️\n🔹 Levier : x500\n🕒 Session : {time.strftime('%H:%M')}"
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+        try:
+            requests.post(url, json=payload)
+        except Exception as e:
+            print("Erreur Telegram:", e)
+
+def main():
+    bids, asks = get_order_book()
+    if bids and asks:
+        signal = analyze_order_book(bids, asks)
+        send_telegram_signal(signal)
+        print(f"✅ Signal actuel : {signal}")
+    else:
+        print("❌ Order book vide ou erreur API")
 
 if __name__ == "__main__":
-    analyze_and_trade()
+    main()
