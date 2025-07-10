@@ -1,4 +1,4 @@
 python-telegram-bot==13.15
-pybitget==1.0.9
+bitget-python-sdk==1.0.8
 requests==2.31.0
 urllib3==1.26.16
